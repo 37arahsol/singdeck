@@ -1,43 +1,41 @@
+import sys
+from PyQt5 import QtWidgets
+from gui import MainWindow, ModeSelectionWindow
+from network import start_server, start_client, stop_all
 import asyncio
-import tkinter as tk
-from tkinter import ttk
-from network import start_server, start_client
+from asyncqt import QEventLoop  # Нужно установить библиотеку asyncqt
 
-class App(tk.Tk):
-    def __init__(self):
-        super().__init__()
-        self.title("Sync Screen App")
-        self.geometry("400x300")
-        self.configure(bg="#2b2b2b")
+class App(QtWidgets.QApplication):
+    def __init__(self, sys_argv):
+        super().__init__(sys_argv)
+        self.loop = QEventLoop(self)
+        asyncio.set_event_loop(self.loop)
 
-        self.create_widgets()
+        self.mode_selection_window = ModeSelectionWindow()
+        self.main_window = MainWindow()
 
-    def create_widgets(self):
-        self.style = ttk.Style(self)
-        self.style.configure("TLabel", background="#2b2b2b", foreground="#ffffff", font=("Arial", 14))
-        self.style.configure("TButton", background="#3c3c3c", foreground="#ffffff", borderwidth=0, padding=10, font=("Arial", 12))
-        self.style.map("TButton", background=[("active", "#4c4c4c")])
+        self.mode_selection_window.server_button.clicked.connect(self.start_server_mode)
+        self.mode_selection_window.client_button.clicked.connect(self.start_client_mode)
 
-        self.label = ttk.Label(self, text="Выберите режим работы:")
-        self.label.pack(pady=20)
+        self.mode_selection_window.show()
 
-        self.server_button = ttk.Button(self, text="Запустить сервер", command=self.start_server_mode)
-        self.server_button.pack(pady=10)
-
-        self.client_button = ttk.Button(self, text="Подключиться к серверу", command=self.start_client_mode)
-        self.client_button.pack(pady=10)
-
-        self.status_label = ttk.Label(self, text="")
-        self.status_label.pack(pady=20)
+        self.aboutToQuit.connect(self.cleanup)
 
     def start_server_mode(self):
-        self.status_label.config(text="Сервер активирован. Ждем подключение парного устройства...")
-        asyncio.create_task(start_server(self))
+        self.mode_selection_window.hide()
+        self.main_window.show()
+        asyncio.ensure_future(start_server(self.main_window))
 
     def start_client_mode(self):
-        self.status_label.config(text="Подключено!")
-        asyncio.create_task(start_client(self))
+        self.mode_selection_window.hide()
+        self.main_window.show()
+        asyncio.ensure_future(start_client(self.main_window))
 
-if __name__ == "__main__":
-    app = App()
-    app.mainloop()
+    def cleanup(self):
+        print("Cleaning up before exit...")
+        stop_all()
+
+if __name__ == '__main__':
+    app = App(sys.argv)
+    with app.loop:
+        sys.exit(app.exec_())
