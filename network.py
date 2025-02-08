@@ -3,10 +3,13 @@ import websockets
 import json
 import pyautogui
 import pyperclip
+from zeroconf import ServiceInfo, Zeroconf, ServiceBrowser, ServiceListener
 import socket
 
-zeroconf_instance = None
-server_instance = None
+zeroconf = Zeroconf()
+service_name = "_syncservice._tcp.local."
+service_type = "_syncservice._tcp.local."
+service_port = 8765
 
 # Обработчик входящих сообщений
 async def process_message(data, websocket):
@@ -14,16 +17,9 @@ async def process_message(data, websocket):
         x = data["x"]
         y = data["y"]
         pyautogui.moveTo(x, y)
-        # Отправляем текущую позицию курсора обратно клиенту
-        x_local, y_local = pyautogui.position()
-        message = {"type": "cursor", "x": x_local, "y": y_local}
-        await websocket.send(json.dumps(message))
     elif data["type"] == "clipboard":
         clipboard_data = data["content"]
         pyperclip.copy(clipboard_data)
-        # Отправляем содержимое буфера обмена обратно клиенту
-        message = {"type": "clipboard", "content": pyperclip.paste()}
-        await websocket.send(json.dumps(message))
     # Добавьте другие типы сообщений по мере необходимости
 
 # Функция обработки соединений
@@ -34,59 +30,80 @@ async def handler(websocket, path):
 
 # Запуск сервера
 async def start_server(app):
-    global zeroconf_instance, server_instance
-    host = '0.0.0.0'
-    port = 8765
+    global zeroconf
+    # Получаем IP-адрес хоста
+    hostname = socket.gethostname()
+    host_ip = socket.gethostbyname(hostname)
 
-    # Если не используем mDNS, эти строки можно убрать
-    # desc = {'path': '/'}
-    # info = ServiceInfo(
-    #     "_http._tcp.local.",
-    #     "SyncServer._http._tcp.local.",
-    #     addresses=[socket.inet_aton(socket.gethostbyname(socket.gethostname()))],
-    #     port=port,
-    #     properties=desc,
-    #     server="SyncServer.local."
-    # )
-    # zeroconf_instance = Zeroconf()
-    # zeroconf_instance.register_service(info)
+    desc = {'name': 'SyncServer'}
+    info = ServiceInfo(
+        service_type,
+        f"SyncServer.{service_type}",
+        addresses=[socket.inet_aton(host_ip)],
+        port=service_port,
+        properties=desc,
+        server=f"{hostname}.local."
+    )
+
+    zeroconf.register_service(info)
+    print("Сервис mDNS зарегистрирован")
 
     async def run_server():
-        global server_instance
-        server_instance = await websockets.serve(handler, host, port)
-        print(f"Server started on {host}:{port}")
-        app.set_status("Сервер активирован. Ждем подключение парного устройства...")
-        await server_instance.wait_closed()
+        print(f"Сервер запущен на {host_ip}:{service_port}")
+        app.set_status("Сервер активирован. Ожидаем подключение...")
+        async with websockets.serve(handler, host_ip, service_port):
+            await asyncio.Future()  # Блокируем функцию, чтобы сервер работал
 
     await run_server()
 
+# Обработчик для обнаружения сервера
+class ServerListener(ServiceListener):
+    def __init__(self):
+        self.server_info = None
+
+    def remove_service(self, zeroconf, type, name):
+        pass
+
+    def add_service(self, zeroconf, type, name):
+        info = zeroconf.get_service_info(type, name)
+        if info:
+            self.server_info = info
+
+    def update_service(self, zeroconf, type, name):
+        pass
+
 # Запуск клиента
-async def start_client(app, host='localhost', port=8765):
-    uri = f"ws://{host}:{port}"
+async def start_client(app):
+    global zeroconf
+    listener = ServerListener()
+    browser = ServiceBrowser(zeroconf, service_type, listener)
+
+    app.set_status("Поиск сервера...")
+
+    # Ожидание обнаружения сервера
+    while listener.server_info is None:
+        await asyncio.sleep(1)  # Изменяем на целое число
+
+    info = listener.server_info
+    addresses = info.addresses
+    host_ip = socket.inet_ntoa(addresses[0])
+    port = info.port
+
+    uri = f"ws://{host_ip}:{port}"
     try:
         async with websockets.connect(uri) as websocket:
-            app.set_status("Подключено!")
+            app.set_status("Подключено к серверу!")
             while True:
                 # Отправляем текущую позицию курсора
                 x, y = pyautogui.position()
                 message = {"type": "cursor", "x": x, "y": y}
                 await websocket.send(json.dumps(message))
-                # Получаем данные от сервера
-                response = await websocket.recv()
-                data = json.loads(response)
-                if data["type"] == "cursor":
-                    pyautogui.moveTo(data["x"], data["y"])
-                elif data["type"] == "clipboard":
-                    pyperclip.copy(data["content"])
+                await asyncio.sleep(0.1)  # Оставляем небольшую задержку
     except Exception as e:
         print(f"Не удалось подключиться к серверу: {e}")
         app.set_status("Ошибка подключения.")
 
 def stop_all():
-    global zeroconf_instance, server_instance
-    if zeroconf_instance:
-        zeroconf_instance.close()
-        print("Zeroconf instance closed")
-    if server_instance:
-        server_instance.close()
-        print("Server instance closed")
+    global zeroconf
+    zeroconf.close()
+    print("Zeroconf instance closed")
