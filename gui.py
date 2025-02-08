@@ -58,6 +58,18 @@ class ModeSelectionWindow(QtWidgets.QWidget):
 
         self.setLayout(layout)
 
+        self.setAttribute(QtCore.Qt.WA_DeleteOnClose)
+        self.destroyed.connect(self.cleanup)
+
+    def closeEvent(self, event):
+        self.cleanup()
+        event.accept()
+
+    def cleanup(self):
+        print("Closing application...")
+        stop_all()
+        QtWidgets.QApplication.instance().quit()
+
 class MainWindow(QtWidgets.QMainWindow):
     def __init__(self):
         super().__init__()

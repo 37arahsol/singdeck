@@ -8,7 +8,6 @@ from zeroconf import ServiceInfo, Zeroconf, ServiceBrowser
 
 zeroconf_instance = None
 server_instance = None
-loop = None
 
 # Обработчик входящих сообщений
 async def process_message(data):
@@ -28,8 +27,8 @@ async def handler(websocket, path):
         await process_message(data)
 
 # Запуск сервера
-def start_server(main_window):
-    global zeroconf_instance, server_instance, loop
+async def start_server(app):
+    global zeroconf_instance, server_instance
     host = '0.0.0.0'
     port = 8765
 
@@ -50,15 +49,11 @@ def start_server(main_window):
         global server_instance
         server_instance = await websockets.serve(handler, host, port)
         print(f"Server started on {host}:{port}")
-        main_window.set_status("Сервер активирован. Ждем подключение парного устройства...")
+        app.status_label.config(text="Сервер активирован. Ждем подключение парного устройства...")
         await server_instance.wait_closed()
 
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    try:
-        loop.run_until_complete(run_server())
-    except asyncio.CancelledError:
-        print("Event loop stopped")
+    loop = asyncio.get_event_loop()
+    await loop.create_task(run_server())
 
 # Обработчик событий обнаружения сервера
 class MyListener:
@@ -71,8 +66,7 @@ class MyListener:
             self.server_info = info
 
 # Запуск клиента
-async def start_client(main_window):
-    global zeroconf_instance
+async def start_client(app):
     zeroconf_instance = Zeroconf()
     listener = MyListener()
     browser = ServiceBrowser(zeroconf_instance, "_http._tcp.local.", listener)
@@ -84,7 +78,7 @@ async def start_client(main_window):
     info = listener.server_info
     uri = f"ws://{socket.inet_ntoa(info.addresses[0])}:{info.port}"
     async with websockets.connect(uri) as websocket:
-        main_window.set_status("Подключено!")
+        app.status_label.config(text="Подключено!")
         while True:
             x, y = pyautogui.position()
             message = {"type": "cursor", "x": x, "y": y}
@@ -97,15 +91,10 @@ async def start_client(main_window):
                 pyperclip.copy(data["content"])
 
 def stop_all():
-    global zeroconf_instance, server_instance, loop
+    global zeroconf_instance, server_instance
     if zeroconf_instance:
         zeroconf_instance.close()
         print("Zeroconf instance closed")
     if server_instance:
         server_instance.close()
         print("Server instance closed")
-    if loop:
-        for task in asyncio.all_tasks(loop):
-            task.cancel()
-        loop.call_soon_threadsafe(loop.stop)
-        print("Event loop stopped")
