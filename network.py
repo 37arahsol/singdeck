@@ -47,9 +47,9 @@ async def start_server(app):
 
     zeroconf.register_service(info)
     print("Сервис mDNS зарегистрирован")
+    print(f"Сервер запущен на {host_ip}:{service_port}")
 
     async def run_server():
-        print(f"Сервер запущен на {host_ip}:{service_port}")
         app.set_status("Сервер активирован. Ожидаем подключение...")
         async with websockets.serve(handler, host_ip, service_port):
             await asyncio.Future()  # Блокируем функцию, чтобы сервер работал
@@ -67,6 +67,7 @@ class ServerListener(ServiceListener):
     def add_service(self, zeroconf, type, name):
         info = zeroconf.get_service_info(type, name)
         if info:
+            print(f"Сервис найден: {info}")
             self.server_info = info
 
     def update_service(self, zeroconf, type, name):
@@ -79,6 +80,7 @@ async def start_client(app):
     browser = ServiceBrowser(zeroconf, service_type, listener)
 
     app.set_status("Поиск сервера...")
+    print("Поиск сервера...")
 
     # Ожидание обнаружения сервера
     while listener.server_info is None:
@@ -89,10 +91,12 @@ async def start_client(app):
     host_ip = socket.inet_ntoa(addresses[0])
     port = info.port
 
+    print(f"Сервер найден: {host_ip}:{port}")
     uri = f"ws://{host_ip}:{port}"
     try:
         async with websockets.connect(uri) as websocket:
             app.set_status("Подключено к серверу!")
+            print("Подключено к серверу!")
             while True:
                 # Отправляем текущую позицию курсора
                 x, y = pyautogui.position()
