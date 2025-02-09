@@ -1,41 +1,66 @@
 import sys
-from PyQt5 import QtWidgets
-from gui import MainWindow, ModeSelectionWindow
-from network import start_server, start_client, stop_all
-import asyncio
-from asyncqt import QEventLoop  # Нужно установить библиотеку asyncqt
+from PyQt5 import QtWidgets, QtCore
+from gui import ModeSelectionWindow, ServerWindow, ClientWindow
+from network import Server, Client
 
 class App(QtWidgets.QApplication):
     def __init__(self, sys_argv):
         super().__init__(sys_argv)
-        self.loop = QEventLoop(self)
-        asyncio.set_event_loop(self.loop)
 
         self.mode_selection_window = ModeSelectionWindow()
-        self.main_window = MainWindow()
-
+        self.mode_selection_window.show()
         self.mode_selection_window.server_button.clicked.connect(self.start_server_mode)
         self.mode_selection_window.client_button.clicked.connect(self.start_client_mode)
 
-        self.mode_selection_window.show()
-
-        self.aboutToQuit.connect(self.cleanup)
+        self.server_window = None
+        self.client_window = None
+        self.server = None
+        self.client = None
 
     def start_server_mode(self):
-        self.mode_selection_window.hide()
-        self.main_window.show()
-        asyncio.ensure_future(start_server(self.main_window))
+        self.server_window = ServerWindow()
+        self.server = Server()
+
+        self.server.client_connected.connect(self.on_client_connected)
+        self.server.message_received.connect(self.on_server_message_received)
+
+        self.server.start_server()
+
+        self.mode_selection_window.close()
+        self.server_window.show()
 
     def start_client_mode(self):
-        self.mode_selection_window.hide()
-        self.main_window.show()
-        asyncio.ensure_future(start_client(self.main_window))
+        self.client_window = ClientWindow()
+        self.client = Client()
 
-    def cleanup(self):
-        print("Cleaning up before exit...")
-        stop_all()
+        self.client.connected.connect(self.on_client_connected_to_server)
+        self.client.message_received.connect(self.on_client_message_received)
+        self.client.error_occurred.connect(self.on_client_error)
+
+        self.client.start_broadcast_listener()
+
+        self.mode_selection_window.close()
+        self.client_window.show()
+
+    def on_client_connected(self, client_socket):
+        self.server_window.info_label.setText("Клиент подключен.")
+        # Здесь можно отправить данные клиенту
+        self.server.send_data("Привет от сервера!")
+
+    def on_server_message_received(self, message):
+        print(f"Сервер получил сообщение: {message}")
+
+    def on_client_connected_to_server(self):
+        self.client_window.info_label.setText("Подключено к серверу.")
+        # Здесь можно отправить данные серверу
+        self.client.send_data("Привет от клиента!")
+
+    def on_client_message_received(self, message):
+        print(f"Клиент получил сообщение: {message}")
+
+    def on_client_error(self, error_message):
+        self.client_window.info_label.setText(f"Ошибка: {error_message}")
 
 if __name__ == '__main__':
     app = App(sys.argv)
-    with app.loop:
-        sys.exit(app.exec_())
+    sys.exit(app.exec_())

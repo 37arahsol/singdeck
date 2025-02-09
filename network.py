@@ -1,113 +1,117 @@
-import asyncio
-import websockets
-import json
-import pyautogui
-import pyperclip
-from zeroconf import ServiceInfo, Zeroconf, ServiceBrowser, ServiceListener
+from PyQt5.QtCore import QObject, pyqtSignal, QByteArray
+from PyQt5.QtNetwork import QTcpServer, QTcpSocket, QHostAddress
+import threading
 import socket
+import time
 
-zeroconf = Zeroconf()
-service_name = "_syncservice._tcp.local."
-service_type = "_syncservice._tcp.local."
-service_port = 8765
+class Server(QObject):
+    client_connected = pyqtSignal(QTcpSocket)
+    message_received = pyqtSignal(str)
 
-# Обработчик входящих сообщений
-async def process_message(data, websocket):
-    if data["type"] == "cursor":
-        x = data["x"]
-        y = data["y"]
-        pyautogui.moveTo(x, y)
-    elif data["type"] == "clipboard":
-        clipboard_data = data["content"]
-        pyperclip.copy(clipboard_data)
-    # Добавьте другие типы сообщений по мере необходимости
-
-# Функция обработки соединений
-async def handler(websocket, path):
-    async for message in websocket:
-        data = json.loads(message)
-        await process_message(data, websocket)
-
-# Запуск сервера
-async def start_server(app):
-    global zeroconf
-    # Получаем IP-адрес хоста
-    hostname = socket.gethostname()
-    host_ip = socket.gethostbyname(hostname)
-
-    desc = {'name': 'SyncServer'}
-    info = ServiceInfo(
-        service_type,
-        f"SyncServer.{service_type}",
-        addresses=[socket.inet_aton(host_ip)],
-        port=service_port,
-        properties=desc,
-        server=f"{hostname}.local."
-    )
-
-    zeroconf.register_service(info)
-    print("Сервис mDNS зарегистрирован")
-    print(f"Сервер запущен на {host_ip}:{service_port}")
-
-    async def run_server():
-        app.set_status("Сервер активирован. Ожидаем подключение...")
-        async with websockets.serve(handler, host_ip, service_port):
-            await asyncio.Future()  # Блокируем функцию, чтобы сервер работал
-
-    await run_server()
-
-# Обработчик для обнаружения сервера
-class ServerListener(ServiceListener):
     def __init__(self):
-        self.server_info = None
+        super().__init__()
+        self.server = QTcpServer()
+        self.server.newConnection.connect(self.handle_new_connection)
 
-    def remove_service(self, zeroconf, type, name):
-        pass
+        # Параметры для широковещательной рассылки
+        self.broadcast_port = 37020  # Произвольный порт для broadcast
+        self.broadcast_message = "SyncServerAvailable"
 
-    def add_service(self, zeroconf, type, name):
-        info = zeroconf.get_service_info(type, name)
-        if info:
-            print(f"Сервис найден: {info}")
-            self.server_info = info
+    def start_server(self, port=8765):
+        if not self.server.listen(QHostAddress.Any, port):
+            print(f"Не удалось запустить сервер: {self.server.errorString()}")
+        else:
+            print(f"Сервер запущен на порту {port}")
+            # Запускаем поток для широковещательной рассылки
+            self.broadcast_thread = threading.Thread(target=self.broadcast_server_presence, args=(port,), daemon=True)
+            self.broadcast_thread.start()
 
-    def update_service(self, zeroconf, type, name):
-        pass
+    def broadcast_server_presence(self, port):
+        udp_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        udp_sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+        message = f"{self.broadcast_message}:{port}"
+        while True:
+            udp_sock.sendto(message.encode('utf-8'), ('<broadcast>', self.broadcast_port))
+            time.sleep(2)  # Рассылаем сообщение каждые 2 секунды
 
-# Запуск клиента
-async def start_client(app):
-    global zeroconf
-    listener = ServerListener()
-    browser = ServiceBrowser(zeroconf, service_type, listener)
+    def handle_new_connection(self):
+        self.client_socket = self.server.nextPendingConnection()
+        self.client_socket.readyRead.connect(self.read_data)
+        self.client_connected.emit(self.client_socket)
+        print("Клиент подключился")
 
-    app.set_status("Поиск сервера...")
-    print("Поиск сервера...")
+    def read_data(self):
+        data = self.client_socket.readAll()
+        message = data.data().decode('utf-8')
+        self.message_received.emit(message)
+        print(f"Получено сообщение: {message}")
 
-    # Ожидание обнаружения сервера
-    while listener.server_info is None:
-        await asyncio.sleep(1)  # Изменяем на целое число
+    def send_data(self, message):
+        if self.client_socket:
+            data = QByteArray()
+            data.append(message)
+            self.client_socket.write(data)
+            print(f"Отправлено сообщение: {message}")
 
-    info = listener.server_info
-    addresses = info.addresses
-    host_ip = socket.inet_ntoa(addresses[0])
-    port = info.port
+class Client(QObject):
+    connected = pyqtSignal()
+    message_received = pyqtSignal(str)
+    error_occurred = pyqtSignal(str)
 
-    print(f"Сервер найден: {host_ip}:{port}")
-    uri = f"ws://{host_ip}:{port}"
-    try:
-        async with websockets.connect(uri) as websocket:
-            app.set_status("Подключено к серверу!")
-            print("Подключено к серверу!")
-            while True:
-                # Отправляем текущую позицию курсора
-                x, y = pyautogui.position()
-                message = {"type": "cursor", "x": x, "y": y}
-                await websocket.send(json.dumps(message))
-                await asyncio.sleep(0.1)  # Оставляем небольшую задержку
-    except Exception as e:
-        print(f"Не удалось подключиться к серверу: {e}")
-        app.set_status("Ошибка подключения.")
+    def __init__(self):
+        super().__init__()
+        self.socket = QTcpSocket()
+        self.socket.connected.connect(self.on_connected)
+        self.socket.readyRead.connect(self.read_data)
+        self.socket.errorOccurred.connect(self.on_error)
 
-def stop_all():
-    global zeroconf
-    zeroconf.close()
-    print("Zeroconf instance closed")
+        # Параметры для прослушивания широковещательных сообщений
+        self.broadcast_port = 37020  # Тот же порт, что и у сервера
+        self.broadcast_message = "SyncServerAvailable"
+
+    def start_broadcast_listener(self):
+        # Запускаем поток для прослушивания широковещательных сообщений
+        self.broadcast_listener_thread = threading.Thread(target=self.listen_for_server_broadcast, daemon=True)
+        self.broadcast_listener_thread.start()
+
+    def listen_for_server_broadcast(self):
+        udp_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        udp_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        udp_sock.bind(('', self.broadcast_port))  # Прослушиваем на всех интерфейсах
+
+        while True:
+            data, addr = udp_sock.recvfrom(1024)
+            message = data.decode('utf-8')
+            if message.startswith(self.broadcast_message):
+                # Извлекаем порт сервера из сообщения
+                _, port = message.split(':')
+                server_ip = addr[0]
+                server_port = int(port)
+                print(f"Найден сервер: {server_ip}:{server_port}")
+                # Подключаемся к серверу
+                self.connect_to_server(server_ip, server_port)
+                break  # Останавливаем прослушивание после подключения
+
+    def connect_to_server(self, ip, port=8765):
+        self.socket.connectToHost(ip, port)
+
+    def on_connected(self):
+        self.connected.emit()
+        print("Подключено к серверу")
+
+    def read_data(self):
+        data = self.socket.readAll()
+        message = data.data().decode('utf-8')
+        self.message_received.emit(message)
+        print(f"Получено сообщение: {message}")
+
+    def send_data(self, message):
+        data = QByteArray()
+        data.append(message)
+        self.socket.write(data)
+        print(f"Отправлено сообщение: {message}")
+
+    def on_error(self, socket_error):
+        error_message = self.socket.errorString()
+        self.error_occurred.emit(error_message)
+        print(f"Ошибка сокета: {error_message}")
