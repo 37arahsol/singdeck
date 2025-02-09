@@ -4,6 +4,7 @@ import threading
 import socket
 import time
 
+
 class Server(QObject):
     client_connected = pyqtSignal(QTcpSocket)
     message_received = pyqtSignal(str)
@@ -23,15 +24,20 @@ class Server(QObject):
         else:
             print(f"Сервер запущен на порту {port}")
             # Запускаем поток для широковещательной рассылки
-            self.broadcast_thread = threading.Thread(target=self.broadcast_server_presence, args=(port,), daemon=True)
+            self.broadcast_thread = threading.Thread(
+                target=self.broadcast_server_presence, args=(port,), daemon=True
+            )
             self.broadcast_thread.start()
 
     def broadcast_server_presence(self, port):
         udp_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         udp_sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
         message = f"{self.broadcast_message}:{port}"
+        broadcast_address = "192.168.1.255"  # Замените на ваш широковещательный адрес
         while True:
-            udp_sock.sendto(message.encode('utf-8'), ('<broadcast>', self.broadcast_port))
+            udp_sock.sendto(
+                message.encode("utf-8"), (broadcast_address, self.broadcast_port)
+            )
             time.sleep(2)  # Рассылаем сообщение каждые 2 секунды
 
     def handle_new_connection(self):
@@ -42,7 +48,7 @@ class Server(QObject):
 
     def read_data(self):
         data = self.client_socket.readAll()
-        message = data.data().decode('utf-8')
+        message = data.data().decode("utf-8")
         self.message_received.emit(message)
         print(f"Получено сообщение: {message}")
 
@@ -52,6 +58,7 @@ class Server(QObject):
             data.append(message)
             self.client_socket.write(data)
             print(f"Отправлено сообщение: {message}")
+
 
 class Client(QObject):
     connected = pyqtSignal()
@@ -71,20 +78,22 @@ class Client(QObject):
 
     def start_broadcast_listener(self):
         # Запускаем поток для прослушивания широковещательных сообщений
-        self.broadcast_listener_thread = threading.Thread(target=self.listen_for_server_broadcast, daemon=True)
+        self.broadcast_listener_thread = threading.Thread(
+            target=self.listen_for_server_broadcast, daemon=True
+        )
         self.broadcast_listener_thread.start()
 
     def listen_for_server_broadcast(self):
         udp_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         udp_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        udp_sock.bind(('', self.broadcast_port))  # Прослушиваем на всех интерфейсах
+        udp_sock.bind(("", self.broadcast_port))  # Прослушиваем на всех интерфейсах
 
         while True:
             data, addr = udp_sock.recvfrom(1024)
-            message = data.decode('utf-8')
+            message = data.decode("utf-8")
             if message.startswith(self.broadcast_message):
                 # Извлекаем порт сервера из сообщения
-                _, port = message.split(':')
+                _, port = message.split(":")
                 server_ip = addr[0]
                 server_port = int(port)
                 print(f"Найден сервер: {server_ip}:{server_port}")
@@ -101,7 +110,7 @@ class Client(QObject):
 
     def read_data(self):
         data = self.socket.readAll()
-        message = data.data().decode('utf-8')
+        message = data.data().decode("utf-8")
         self.message_received.emit(message)
         print(f"Получено сообщение: {message}")
 

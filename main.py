@@ -3,6 +3,7 @@ from PyQt5 import QtWidgets, QtCore
 from gui import ModeSelectionWindow, ServerWindow, ClientWindow
 from network import Server, Client
 
+
 class App(QtWidgets.QApplication):
     def __init__(self, sys_argv):
         super().__init__(sys_argv)
@@ -37,10 +38,17 @@ class App(QtWidgets.QApplication):
         self.client.message_received.connect(self.on_client_message_received)
         self.client.error_occurred.connect(self.on_client_error)
 
+        self.client_window.connect_button.clicked.connect(self.manual_connect_to_server)
+
         self.client.start_broadcast_listener()
 
         self.mode_selection_window.close()
         self.client_window.show()
+
+    def manual_connect_to_server(self):
+        ip = self.client_window.ip_input.text()
+        if ip:
+            self.client.connect_to_server(ip)
 
     def on_client_connected(self, client_socket):
         self.server_window.info_label.setText("Клиент подключен.")
@@ -61,6 +69,7 @@ class App(QtWidgets.QApplication):
     def on_client_error(self, error_message):
         self.client_window.info_label.setText(f"Ошибка: {error_message}")
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     app = App(sys.argv)
     sys.exit(app.exec_())
